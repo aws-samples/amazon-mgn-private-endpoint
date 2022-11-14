@@ -1,0 +1,490 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Template for the AWS MGN PoC with private Endpoint'
+
+#Parameters
+Parameters:
+  AWSLinux2AMI:
+    Description: The latest AMI ID for Amazon Linux
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs
+  AWSWindowsAMI:
+    Description: The latest AMI ID for Windows server 2019
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base  
+
+
+#Resources
+Resources:
+#Create source and Stage VPC, subnets, routing tables and VPC peering between source and Stage network
+#source part
+  VPCSource:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 192.168.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Environment
+          Value: Source
+        - Key: Name
+          Value: Source
+  SubnetSourcePrivate:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPCSource
+      AvailabilityZone: !Select 
+        - 0
+        - !GetAZs ''
+      CidrBlock: 192.168.1.0/24
+      Tags:
+        - Key: Environment
+          Value: Source
+        - Key: Name
+          Value: SourcePrivate
+  RouteTableSourcePrivate:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPCSource
+      Tags:
+        - Key: Environment
+          Value: Source
+        - Key: Name
+          Value: Source_Private
+  SubnetRouteTableAssociationSourcePrivate:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetSourcePrivate
+      RouteTableId: !Ref RouteTableSourcePrivate
+  NetworkAclSource:
+    Type: 'AWS::EC2::NetworkAcl'
+    Properties:
+      VpcId: !Ref VPCSource
+      Tags:
+        - Key: Environment
+          Value: Source
+        - Key: Name
+          Value: Source
+  InboundNetworkAclEntrySource:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref NetworkAclSource
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+  OutBoundNetworkAclEntrySource:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref NetworkAclSource
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+  SubnetNetworkAclAssociationSourcePrivate:
+    Type: 'AWS::EC2::SubnetNetworkAclAssociation'
+    Properties:
+      SubnetId: !Ref SubnetSourcePrivate
+      NetworkAclId: !Ref NetworkAclSource
+  myDhcpOptions:
+    Type: 'AWS::EC2::DHCPOptions'
+    Properties:
+      #DomainName: !Ref DomainName
+      DomainNameServers:
+        - 10.0.1.159
+        - 10.0.1.137
+      Tags:
+        - Key: Name
+          Value: Source
+  myVPCDHCPOptionsAssociation:
+    #DependsOn: DNSandVPNServer
+    Type: 'AWS::EC2::VPCDHCPOptionsAssociation'
+    Properties:
+      VpcId: !Ref VPCSource
+      DhcpOptionsId: !Ref myDhcpOptions
+
+# Staging VPC Resources 
+
+## VPC
+  VPCStage:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Environment
+          Value: Stage
+        - Key: Name
+          Value: Stage
+  SubnetStagePrivate:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPCStage
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs ''
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Environment
+          Value: Stage
+        - Key: Name
+          Value: StagePrivate
+  RouteTableStagePrivate:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPCStage
+      Tags:
+        - Key: Environment
+          Value: Stage
+        - Key: Name
+          Value: Stage_Private
+  SubnetRouteTableAssociationStagePrivate:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetStagePrivate
+      RouteTableId: !Ref RouteTableStagePrivate
+  
+  NetworkAclStage:
+    Type: 'AWS::EC2::NetworkAcl'
+    Properties:
+      VpcId: !Ref VPCStage
+      Tags:
+        - Key: Environment
+          Value: Stage
+        - Key: Name
+          Value: Stage
+  InboundNetworkAclEntryStage:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref NetworkAclStage
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+  OutBoundNetworkAclEntryStage:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref NetworkAclStage
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+  SubnetNetworkAclAssociationStagePrivate:
+    Type: 'AWS::EC2::SubnetNetworkAclAssociation'
+    Properties:
+      SubnetId: !Ref SubnetStagePrivate
+      NetworkAclId: !Ref NetworkAclStage
+
+  myVPCPeeringConnection:
+    Type: 'AWS::EC2::VPCPeeringConnection'
+    Properties:
+      VpcId: !Ref VPCSource
+      PeerVpcId: !Ref VPCStage
+  PeeringRouteSource:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 10.0.0.0/16
+      RouteTableId: !Ref RouteTableSourcePrivate
+      VpcPeeringConnectionId: !Ref myVPCPeeringConnection
+  PeeringRouteStage:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 192.168.0.0/16
+      RouteTableId: !Ref RouteTableStagePrivate
+      VpcPeeringConnectionId: !Ref myVPCPeeringConnection
+
+## Stage Security groups 
+
+  VpcEpSecurityGrp:
+      Type: "AWS::EC2::SecurityGroup"
+      Properties:
+          GroupDescription: "stage-endpoint-sg"
+          GroupName: "stage-endpoint-sg"
+          VpcId: !Ref VPCStage
+          SecurityGroupIngress: 
+            - 
+              CidrIp: !GetAtt VPCSource.CidrBlock
+              FromPort: 443
+              IpProtocol: "tcp"
+              ToPort: 443
+            - 
+              CidrIp: !GetAtt VPCStage.CidrBlock
+              FromPort: 443
+              IpProtocol: "tcp"
+              ToPort: 443
+          SecurityGroupEgress: 
+            - 
+              CidrIp: "0.0.0.0/0"
+              IpProtocol: "-1"
+  SourceEC2SecurityGrp:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+        GroupDescription: "source-instance-sg"
+        GroupName: "source-instance-sg"
+        VpcId: !Ref VPCSource
+        SecurityGroupIngress: 
+          - 
+            CidrIp: !GetAtt VPCSource.CidrBlock
+            Description: "source-vpc"
+            FromPort: 22
+            IpProtocol: "tcp"
+            ToPort: 22
+          - 
+            CidrIp: "0.0.0.0/0"
+            FromPort: -1
+            IpProtocol: "icmp"
+            ToPort: -1
+          - 
+            CidrIp: !GetAtt VPCSource.CidrBlock
+            Description: "source-vpc"
+            FromPort: 3389
+            IpProtocol: "tcp"
+            ToPort: 3389
+        SecurityGroupEgress: 
+          - 
+            CidrIp: "0.0.0.0/0"
+            IpProtocol: "-1"  
+
+
+## Replication control plane Endpoints
+
+  EC2VPCEndpoint:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Interface"
+          VpcId: !Ref VPCStage
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2"
+          PolicyDocument: |
+              {
+                "Statement": [
+                  {
+                    "Action": "*", 
+                    "Effect": "Allow", 
+                    "Principal": "*", 
+                    "Resource": "*"
+                  }
+                ]
+              }
+          SubnetIds: 
+            - !Ref SubnetStagePrivate
+          PrivateDnsEnabled: true
+          SecurityGroupIds: 
+            - !Ref VpcEpSecurityGrp
+  MGNVPCEndpoint:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Interface"
+          VpcId: !Ref VPCStage
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.mgn"
+          PolicyDocument: |
+              {
+                "Statement": [
+                  {
+                    "Action": "*", 
+                    "Effect": "Allow", 
+                    "Principal": "*", 
+                    "Resource": "*"
+                  }
+                ]
+              }
+          SubnetIds: 
+            - !Ref SubnetStagePrivate
+          PrivateDnsEnabled: true
+          SecurityGroupIds: 
+            - !Ref VpcEpSecurityGrp
+  S3VPCEndpoint:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Interface"
+          VpcId: !Ref VPCStage
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+          PolicyDocument: |
+              {
+                "Statement": [
+                  {
+                    "Action": "*", 
+                    "Effect": "Allow", 
+                    "Principal": "*", 
+                    "Resource": "*"
+                  }
+                ]
+              }
+          SubnetIds: 
+            - !Ref SubnetStagePrivate
+          PrivateDnsEnabled: false
+          SecurityGroupIds: 
+            - !Ref VpcEpSecurityGrp
+  S3GatewayEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      RouteTableIds:
+        - !Ref RouteTableStagePrivate
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VPCStage
+  
+## Optional Endpoint to connect EC2 via SSM session manager
+
+  SSMVPCEndpoint:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Interface"
+          VpcId: !Ref VPCStage
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+          PolicyDocument: |
+              {
+                "Statement": [
+                  {
+                    "Action": "*", 
+                    "Effect": "Allow", 
+                    "Principal": "*", 
+                    "Resource": "*"
+                  }
+                ]
+              }
+          SubnetIds: 
+            - !Ref SubnetStagePrivate
+          PrivateDnsEnabled: true
+          SecurityGroupIds: 
+            - !Ref VpcEpSecurityGrp       
+  SsmMsgVPCEndpoint:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Interface"
+          VpcId: !Ref VPCStage
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+          PolicyDocument: |
+              {
+                "Statement": [
+                  {
+                    "Action": "*", 
+                    "Effect": "Allow", 
+                    "Principal": "*", 
+                    "Resource": "*"
+                  }
+                ]
+              }
+          SubnetIds: 
+            - !Ref SubnetStagePrivate
+          PrivateDnsEnabled: true
+          SecurityGroupIds: 
+            - !Ref VpcEpSecurityGrp               
+  
+## Route 53 resolver for DNS resolution of Endpoint private name from source
+
+  ResolverEC2SecurityGrp:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+        GroupDescription: "resolver-endpoint-sg"
+        GroupName: "resolver-endpoint-sg"
+        VpcId: !Ref VPCStage
+        SecurityGroupIngress: 
+          - 
+            CidrIp: !GetAtt VPCSource.CidrBlock
+            FromPort: 53
+            IpProtocol: "tcp"
+            ToPort: 53
+          - 
+            CidrIp: !GetAtt VPCStage.CidrBlock
+            FromPort: 53
+            IpProtocol: "tcp"
+            ToPort: 53
+          - 
+            CidrIp: !GetAtt VPCSource.CidrBlock
+            FromPort: 53
+            IpProtocol: "udp"
+            ToPort: 53
+          - 
+            CidrIp: !GetAtt VPCStage.CidrBlock
+            FromPort: 53
+            IpProtocol: "udp"
+            ToPort: 53  
+        SecurityGroupEgress: 
+          - 
+            CidrIp: "0.0.0.0/0"
+            IpProtocol: "-1"    
+  Route53ResolverResolverEndpoint:
+    Type: "AWS::Route53Resolver::ResolverEndpoint"
+    Properties:
+        Name: "endpoint-dns1"
+        SecurityGroupIds: 
+          - !Ref ResolverEC2SecurityGrp
+        Direction: "INBOUND"
+        IpAddresses: 
+          - 
+            Ip: "10.0.1.159"
+            SubnetId: !Ref SubnetStagePrivate
+          - 
+            Ip: "10.0.1.137"
+            SubnetId: !Ref SubnetStagePrivate
+
+## Source Test servers (EC2 in our PoC )
+
+## (optional) Instance role and Profile to enable SSM connectivity
+  Ec2SSMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref Ec2SSMRole
+
+## Source Windows server
+  SourceEc2:
+          Type: "AWS::EC2::Instance"
+          Properties:
+              ImageId: !Ref AWSWindowsAMI
+              InstanceType: "t3.medium"
+              Tenancy: "default"
+              SubnetId: !Ref SubnetSourcePrivate
+              SecurityGroupIds: 
+                - !Ref SourceEC2SecurityGrp 
+              IamInstanceProfile: !Ref EC2InstanceProfile   
+              Tags: 
+                - 
+                  Key: "Name"
+                  Value: "source-windows"             
+#Outputs
+Outputs:
+  VPCSource:
+    Description: The VPC ID to use for the resources in the Source OnPrem Environment
+    Value: !Ref VPCSource
+    Export:
+      Name: 'MGN-VPCSource'
+  SubnetSourcePrivate:
+    Description: The subnet ID to use for private servers in the Source Source Environment
+    Value: !Ref SubnetSourcePrivate
+    Export:
+      Name: 'MGN-SubnetSourcePrivate'
+  VPCStage:
+    Description: The VPC ID to use for the resources in the Source OnPrem Environment
+    Value: !Ref VPCStage
+    Export:
+      Name: 'MGN-VPCStage'
+  SubnetStagePrivate:
+    Description: The subnet ID to use for private servers in the Stage Source Environment
+    Value: !Ref SubnetStagePrivate
+    Export:
+      Name: 'MGN-SubnetStagePrivate'
+  S3InterfaceEndpoint:
+    Description: The Interface endpoint name for S3 in the Stage Environment
+    Value: !Ref S3VPCEndpoint
+    Export:
+      Name: 'MGN-S3VPCEndpointName'
